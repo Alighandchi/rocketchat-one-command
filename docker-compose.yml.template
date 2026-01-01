@@ -46,7 +46,8 @@ services:
     volumes:
       - db-data:/data/db
       - db-dump:/dump
-    command: mongod --oplogSize 128 --replSet rs0 --bind_ip_all --auth
+      - ./mongodb.key:/opt/mongodb/mongodb.key:ro
+    command: mongod --oplogSize 128 --replSet rs0 --bind_ip_all --auth --keyFile /opt/mongodb/mongodb.key
     environment:
       - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
       - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS}
