@@ -53,15 +53,15 @@ else
     exit 1
 fi
 
-# --- 3. Directory Setup (NEW SECTION) ---
+# --- 3. Directory Setup (NEW FEATURE) ---
 print_step "Installation Directory"
 
-# Default to a clean directory in the user's home
+# Default to a clean directory in the user's home (e.g., /root/netadminplus-rocketchat)
 DEFAULT_DIR="$HOME/netadminplus-rocketchat"
 
 echo -e "    Default installation path: ${CYAN}$DEFAULT_DIR${NC}"
 read -p "    Do you want to install here? (y/n): " DIR_CONFIRM < /dev/tty
-DIR_CONFIRM=${DIR_CONFIRM:-y} # Default to yes
+DIR_CONFIRM=${DIR_CONFIRM:-y} # Default to yes if user presses enter
 
 if [[ "$DIR_CONFIRM" =~ ^[Nn]$ ]]; then
     read -p "    Enter custom directory path: " INSTALL_DIR < /dev/tty
@@ -264,20 +264,23 @@ echo -e "   Data Directory:   $(pwd)"
 echo -e "   MongoDB User:     $MONGO_USER"
 echo -e "   MongoDB Pass:     (Check .env file)"
 echo -e "   --------------------------------------------------------------"
-echo -e "   ${CYAN}To view logs: docker compose logs -f${NC}"
+# Restored these lines as requested to ensure original functionality
+echo -e "   ${CYAN}Note: If the site shows 'Bad Gateway' initially, please wait${NC}"
+echo -e "   ${CYAN}another 30 seconds for the database to finish syncing.${NC}"
+echo -e "   To view logs: docker compose logs -f"
 
-# --- 11. Firewall Instructions (NEW SECTION) ---
+# --- 11. Firewall Instructions (NEW FEATURE) ---
 print_step "Firewall Configuration (Manual Action Required)"
 print_info "For your site to be accessible, you MUST open ports 80 and 443."
 echo ""
 
 if command -v ufw >/dev/null; then
-    echo -e "${YELLOW}   Detected UFW (Ubuntu/Debian): Run these commands:${NC}"
+    echo -e "${YELLOW}   Detected UFW (Ubuntu/Debian). Run these commands:${NC}"
     echo -e "   sudo ufw allow 80/tcp"
     echo -e "   sudo ufw allow 443/tcp"
     echo -e "   sudo ufw reload"
 elif command -v firewall-cmd >/dev/null; then
-    echo -e "${YELLOW}   Detected Firewalld (CentOS/Rocky/Alma): Run these commands:${NC}"
+    echo -e "${YELLOW}   Detected Firewalld (CentOS/Rocky/Alma). Run these commands:${NC}"
     echo -e "   sudo firewall-cmd --permanent --add-service=http"
     echo -e "   sudo firewall-cmd --permanent --add-service=https"
     echo -e "   sudo firewall-cmd --reload"
