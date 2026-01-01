@@ -55,7 +55,7 @@ Created by [Ramtin - NetAdminPlus](https://netadminplus.com)
 
 ### Recommended: Download and Run
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh](https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh) -o rocketchat-installer.sh
+curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh
 chmod +x rocketchat-installer.sh
 sudo ./rocketchat-installer.sh
 ```
@@ -64,13 +64,13 @@ sudo ./rocketchat-installer.sh
 
 ⚠️ **Note**: The one-line method may have issues with interactive prompts. Use the download method above if you encounter problems.
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh](https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh) | sudo bash
+curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh | sudo bash
 ```
 
 ### Or Manual Installation
 ```bash
 # Clone the repository
-git clone [https://github.com/netadminplus/rocketchat-one-command.git](https://github.com/netadminplus/rocketchat-one-command.git)
+git clone https://github.com/netadminplus/rocketchat-one-command.git
 cd rocketchat-one-command
 
 # Make installer executable
