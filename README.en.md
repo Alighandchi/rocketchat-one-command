@@ -130,7 +130,7 @@ cat .env
 
 After installation completes:
 ```
-URL: [https://your-domain.com](https://your-domain.com)
+URL: https://your-domain.com
 Admin Setup: First user to register becomes admin
 ```
 
