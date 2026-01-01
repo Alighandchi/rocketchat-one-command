@@ -12,7 +12,7 @@
 
 **نصب آسان RocketChat با Docker، SSL و پیکربندی خودکار**
 
-ساخته شده توسط [رامتین - نت ادمین پلاس](https://netadminplus.com)
+[رامتین - نت ادمین پلاس](https://netadminplus.com)
 
 [یوتیوب](https://youtube.com/@netadminplus) • [وبسایت](https://netadminplus.com) • [اینستاگرام](https://instagram.com/netadminplus)
 
@@ -22,14 +22,16 @@
 
 - نصب با یک دستور
 - SSL خودکار با Let's Encrypt و تمدید اتوماتیک
+- **جدید:** قابلیت انتخاب مسیر نصب دلخواه
+- **جدید:** تنظیم خودکار Cronjob برای نگهداری و تمدید گواهی
+- **جدید:** سیستم انتظار هوشمند (نمایش وضعیت تا زمان بالا آمدن کامل سرور)
 - مبتنی بر Docker
 - پشتیبانی از Docker registry mirror برای ایران
 - تولید خودکار رمزهای امن
 - بررسی سیستم قبل از نصب
 - بررسی DNS دامنه
 - پشتیبانی از Ubuntu، Debian، Rocky Linux، CentOS، AlmaLinux
-- ساختار منظم فایل‌ها
-- قابلیت نصب با هشدار اگر سیستم شرایط کامل را نداشته باشد
+- تشخیص هوشمند فایروال (UFW/Firewalld)
 
 ---
 
@@ -69,7 +71,7 @@ sudo ./rocketchat-installer.sh
 </div>
 
 ```bash
-curl -fsSL [https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh](https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh) | sudo bash
+curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh | sudo bash(https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh) | sudo bash
 ```
 
 <div dir="rtl">
@@ -93,34 +95,31 @@ sudo ./rocketchat-installer.sh
 
 اسکریپت این کارها را انجام می‌دهد:
 
-1. بررسی رم، CPU و دیسک
-2. تشخیص نوع لینوکس
-3. بررسی دسترسی به Docker Hub
-4. نصب یا آپدیت Docker و Docker Compose
-5. دریافت دامنه از شما
-6. بررسی DNS دامنه
-7. دریافت ایمیل (اختیاری، برای اطلاع‌رسانی SSL)
-8. دریافت آدرس Docker registry mirror (در صورت نیاز)
-9. تولید رمزهای امن MongoDB
-10. ساخت فایل Docker Compose
-11. دریافت گواهی SSL از Let's Encrypt
-12. تنظیم تمدید خودکار گواهی
-13. نمایش دستورات فایروال
-14. راه‌اندازی کانتینرها
-15. نمایش اطلاعات دسترسی و رمزها
+1. بررسی منابع سیستم (رم، CPU)
+2. تعیین مسیر نصب (پیش‌فرض: `~/netadminplus-rocketchat`)
+3. ایجاد ساختار پوشه‌ها (`data/mongodb`, `data/uploads`, ...)
+4. دریافت اطلاعات دامنه و بررسی DNS
+5. نصب یا آپدیت Docker
+6. تولید رمزهای امن و ساخت فایل `.env`
+7. تنظیم Cronjob هفتگی برای بروزرسانی SSL (اختیاری)
+8. راه‌اندازی کانتینرها
+9. **انتظار هوشمند:** بررسی لاگ‌ها تا زمانی که سرور کاملاً آماده شود (جلوگیری از خطای Bad Gateway)
+10. نمایش دستورات دقیق فایروال بر اساس سیستم عامل شما
 
 ---
 
 ## ساختار فایل‌ها
 
-بعد از نصب، این فایل‌ها در پوشه شما خواهند بود:
+مسیر پیش‌فرض نصب `~/netadminplus-rocketchat` است:
 
 </div>
 
 ```
-rocketchat-one-command/
+netadminplus-rocketchat/
 ├── docker-compose.yml       # تنظیمات Docker Compose
-├── .env                      # متغیرها و رمزها
+├── .env                     # متغیرها و رمزها
+├── renew-cert.sh            # اسکریپت تمدید خودکار (توسط Cron اجرا می‌شود)
+├── cron.log                 # لاگ‌های مربوط به Cronjob
 ├── data/
 │   ├── mongodb/             # فایل‌های دیتابیس MongoDB
 │   ├── uploads/             # فایل‌های آپلود شده
@@ -148,7 +147,7 @@ cat .env
 
 ### دسترسی به RocketChat
 
-بعد از نصب:
+بعد از نصب موفقیت‌آمیز:
 
 </div>
 
@@ -163,7 +162,8 @@ cat .env
 
 ## تنظیم فایروال
 
-اسکریپت دستورات فایروال را نمایش می‌دهد. مثال برای UFW:
+اسکریپت در پایان نصب، نوع فایروال شما را تشخیص می‌دهد (UFW یا Firewalld) و دستورات دقیق را نمایش می‌دهد.
+مثال کلی برای UFW:
 
 </div>
 
@@ -177,6 +177,15 @@ sudo ufw reload
 
 ---
 
+## نگهداری خودکار (Cronjob)
+
+در حین نصب، از شما پرسیده می‌شود که آیا مایل به فعال‌سازی Cronjob هستید یا خیر. این قابلیت:
+- هفته‌ای یک بار (یکشنبه ساعت ۳ صبح) اجرا می‌شود.
+- اسکریپت `renew-cert.sh` را اجرا می‌کند.
+- سرویس Traefik را ریستارت می‌کند تا از اعمال آخرین گواهی‌های SSL اطمینان حاصل شود.
+
+---
+
 ## آپدیت
 
 برای آپدیت RocketChat، فایل [UPDATE.md](docs/UPDATE.md) را ببینید.
@@ -186,14 +195,6 @@ sudo ufw reload
 ## رفع مشکلات
 
 برای مشکلات رایج و راه‌حل‌ها، فایل [TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) را ببینید.
-
----
-
-## فایل‌های مهم
-
-- **`.env`** - شامل تمام رمزها (رمز MongoDB و غیره)
-- **`docker-compose.yml`** - تنظیمات سرویس‌ها
-- **`data/`** - تمام داده‌های دائمی (دیتابیس، آپلودها، گواهی‌ها)
 
 ### پشتیبان‌گیری
 
@@ -216,6 +217,9 @@ cp .env .env.backup
 </div>
 
 ```bash
+# ابتدا وارد پوشه نصب شوید
+cd ~/netadminplus-rocketchat
+
 # متوقف کردن سرویس‌ها
 docker compose down
 
@@ -224,9 +228,6 @@ docker compose up -d
 
 # مشاهده لاگ‌ها
 docker compose logs -f
-
-# ریستارت سرویس‌ها
-docker compose restart
 ```
 
 <div dir="rtl">
@@ -238,11 +239,16 @@ docker compose restart
 </div>
 
 ```bash
+cd ~/netadminplus-rocketchat
+
 # متوقف و حذف کانتینرها
 docker compose down -v
 
-# حذف داده‌ها (⚠️ این کار همه چیز را پاک می‌کند!)
-rm -rf data/
+# بازگشت به پوشه قبل
+cd ..
+
+# حذف پوشه نصب (⚠️ این کار همه داده‌ها را پاک می‌کند!)
+rm -rf netadminplus-rocketchat/
 
 # حذف Docker (اختیاری)
 # Ubuntu/Debian: sudo apt remove docker-ce docker-ce-cli containerd.io
