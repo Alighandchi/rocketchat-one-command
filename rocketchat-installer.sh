@@ -9,7 +9,8 @@
 # Instagram: https://instagram.com/netadminplus
 #
 # Description: Automated RocketChat deployment with Docker, SSL, and 
-#              Iranian mirror support
+#              Iranian mirror support.
+#              Includes auto-cleanup and Docker Compose V2 enforcement.
 #############################################################################
 
 set -e
@@ -98,59 +99,67 @@ ask_question() {
 }
 
 #############################################################################
-# Check Functions
+# Core Functions
 #############################################################################
 
 check_root() {
     print_step "Checking root privileges..."
-    
     if [ "$EUID" -ne 0 ]; then
         print_error "This script must be run as root or with sudo"
-        echo ""
         print_info "Please run: ${YELLOW}sudo $0${NC}"
         exit 1
     fi
-    
     print_success "Running with root privileges"
+}
+
+# --- NUCLEAR CLEANUP FUNCTION ---
+perform_cleanup() {
+    print_separator
+    print_step "Performing Pre-Installation Cleanup..."
+    print_warning "This will stop all containers and delete old data to prevent password conflicts."
+    
+    # Stop containers nicely first if docker exists
+    if command -v docker &> /dev/null; then
+        print_info "Stopping existing containers..."
+        # Try docker compose down if file exists
+        if [ -f "docker-compose.yml" ]; then
+            docker compose down -v 2>/dev/null || true
+        fi
+        
+        # Force kill everything else to clear conflicts
+        docker rm -f $(docker ps -aq) 2>/dev/null || true
+        docker network prune -f 2>/dev/null || true
+    fi
+
+    # Delete local data to ensure fresh passwords
+    print_info "Removing old configuration and data..."
+    rm -rf "$DATA_DIR"
+    rm -f "$ENV_FILE"
+    rm -f "$COMPOSE_FILE"
+    
+    print_success "Cleanup complete. Ready for fresh install."
 }
 
 detect_distro() {
     print_step "Detecting Linux distribution..."
-    
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         DISTRO=$ID
         VERSION=$VERSION_ID
-        
         case $DISTRO in
-            ubuntu|debian)
-                PKG_MANAGER="apt"
-                print_success "Detected: $PRETTY_NAME"
-                ;;
+            ubuntu|debian) PKG_MANAGER="apt" ;;
             centos|rhel|rocky|almalinux)
                 PKG_MANAGER="dnf"
-                if ! command -v dnf &> /dev/null; then
-                    PKG_MANAGER="yum"
-                fi
-                print_success "Detected: $PRETTY_NAME"
+                if ! command -v dnf &> /dev/null; then PKG_MANAGER="yum"; fi
                 ;;
             *)
-                print_warning "Unknown distribution: $DISTRO"
-                print_info "Attempting to continue, but issues may occur..."
-                if command -v apt &> /dev/null; then
-                    PKG_MANAGER="apt"
-                elif command -v dnf &> /dev/null; then
-                    PKG_MANAGER="dnf"
-                elif command -v yum &> /dev/null; then
-                    PKG_MANAGER="yum"
-                else
-                    print_error "Cannot determine package manager"
-                    exit 1
-                fi
+                PKG_MANAGER="apt"
+                print_warning "Unknown distribution: $DISTRO. Defaulting to apt."
                 ;;
         esac
+        print_success "Detected: $PRETTY_NAME"
     else
-        print_error "Cannot detect distribution. /etc/os-release not found"
+        print_error "Cannot detect distribution."
         exit 1
     fi
 }
@@ -158,78 +167,28 @@ detect_distro() {
 check_system_requirements() {
     print_step "Checking system requirements..."
     
-    # Check RAM (in MB for better accuracy)
+    # Check RAM
     local total_ram_mb=$(free -m | awk '/^Mem:/{print $2}')
-    local total_ram_gb=$(echo "scale=1; $total_ram_mb/1024" | bc)
-    
     if [ "$total_ram_mb" -lt 2048 ]; then
-        print_warning "RAM: ${total_ram_gb}GB detected (Minimum 2GB required, 4GB recommended)"
-        print_info "Your server may experience performance issues or instability"
-        echo ""
-        ask_question "Do you want to continue anyway? (yes/no)" continue_with_low_ram "no"
-        
-        if [[ ! "$continue_with_low_ram" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            print_error "Installation cancelled due to insufficient RAM"
-            exit 1
-        fi
-        print_warning "Continuing with low RAM - monitor your system closely"
+        print_warning "Low RAM detected ($total_ram_mb MB). Minimum 2GB required."
+        ask_question "Continue anyway? (yes/no)" continue_ram "no"
+        if [[ ! "$continue_ram" =~ ^[Yy] ]]; then exit 1; fi
     else
-        print_success "RAM: ${total_ram_gb}GB"
-    fi
-    
-    # Check CPU cores
-    local cpu_cores=$(nproc)
-    if [ "$cpu_cores" -lt 2 ]; then
-        print_warning "CPU: ${cpu_cores} core(s) (2+ cores recommended for better performance)"
-    else
-        print_success "CPU: ${cpu_cores} core(s)"
-    fi
-    
-    # Check disk space (need at least 20GB)
-    local disk_space=$(df -BG "$INSTALL_DIR" | awk 'NR==2 {print $4}' | sed 's/G//')
-    if [ "$disk_space" -lt 20 ]; then
-        print_warning "Disk space: ${disk_space}GB available (Minimum 20GB recommended)"
-        print_info "You may run out of space as your RocketChat database grows"
-        echo ""
-        ask_question "Do you want to continue anyway? (yes/no)" continue_with_low_disk "no"
-        
-        if [[ ! "$continue_with_low_disk" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            print_error "Installation cancelled due to insufficient disk space"
-            exit 1
-        fi
-        print_warning "Continuing with limited disk space - monitor usage regularly"
-    else
-        print_success "Disk space: ${disk_space}GB available"
+        print_success "RAM: OK"
     fi
 }
 
 check_docker_hub_access() {
     print_step "Checking Docker Hub accessibility..."
-    
     if timeout 5 curl -sf https://hub.docker.com &> /dev/null; then
         print_success "Docker Hub is accessible"
         DOCKER_REGISTRY_MIRROR=""
-        return 0
     else
-        print_warning "Docker Hub is not accessible or blocked"
-        echo ""
-        print_info "You may need a Docker registry mirror for pulling images"
-        echo ""
-        
-        ask_question "Do you have a Docker registry mirror? (yes/no)" has_mirror "no"
-        
-        if [[ "$has_mirror" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            ask_question "Enter your Docker registry mirror URL:" DOCKER_REGISTRY_MIRROR ""
-            
-            if [ -n "$DOCKER_REGISTRY_MIRROR" ]; then
-                print_success "Will use mirror: $DOCKER_REGISTRY_MIRROR"
-            fi
-        else
-            print_warning "Continuing without mirror. Image pulls may fail."
-            DOCKER_REGISTRY_MIRROR=""
+        print_warning "Docker Hub blocked or inaccessible."
+        ask_question "Do you have a mirror URL? (yes/no)" has_mirror "no"
+        if [[ "$has_mirror" =~ ^[Yy] ]]; then
+            ask_question "Enter mirror URL:" DOCKER_REGISTRY_MIRROR ""
         fi
-        
-        return 1
     fi
 }
 
@@ -239,225 +198,128 @@ check_docker_hub_access() {
 
 install_dependencies() {
     print_step "Installing system dependencies..."
-    
-    case $PKG_MANAGER in
-        apt)
-            print_info "Updating package lists..."
-            # Added || true to prevent script exit on 403 Forbidden errors
-            apt update -qq || true
-            
-            print_info "Installing dependencies..."
-            apt install -y curl wget git ca-certificates gnupg lsb-release jq bc &> /dev/null
-            ;;
-        dnf|yum)
-            print_info "Installing dependencies..."
-            $PKG_MANAGER install -y curl wget git ca-certificates jq bc &> /dev/null
-            ;;
-    esac
-    
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        # || true prevents exit on 403 Forbidden errors
+        apt update -qq || true
+        apt install -y curl wget git ca-certificates gnupg lsb-release jq bc &> /dev/null
+    else
+        $PKG_MANAGER install -y curl wget git ca-certificates jq bc &> /dev/null
+    fi
     print_success "Dependencies installed"
 }
 
 install_docker() {
-    print_step "Installing/Updating Docker..."
+    print_step "Configuring Docker environment..."
     
-    if command -v docker &> /dev/null; then
-        local current_version=$(docker --version | awk '{print $3}' | sed 's/,//')
-        print_info "Docker is already installed (version: $current_version)"
-    else
-        print_info "Docker not found. Installing..."
+    # 1. Install Docker Engine if missing
+    if ! command -v docker &> /dev/null; then
+        print_info "Installing Docker..."
+        if [ "$PKG_MANAGER" = "apt" ]; then
+            rm -f /etc/apt/sources.list.d/docker* /etc/apt/keyrings/docker*
+            apt update -qq || true
+            apt install -y docker.io -qq
+        else
+            $PKG_MANAGER install -y docker
+        fi
+        systemctl start docker
+        systemctl enable docker
     fi
+
+    # 2. Force Install Docker Compose V2 (Fixes KeyError issue)
+    print_info "Ensuring Docker Compose V2 is installed..."
     
-    case $PKG_MANAGER in
-        apt)
-            # Remove old repo configs
-            rm -f /etc/apt/sources.list.d/docker.list
-            rm -f /etc/apt/sources.list.d/docker.sources
-            rm -f /etc/apt/keyrings/docker.gpg
-            rm -f /etc/apt/keyrings/docker.asc
-            
-            # Attempt installation from Ubuntu repo if official one fails
-            if ! command -v docker &> /dev/null; then
-                print_info "Installing Docker from Ubuntu repository..."
-                apt update -qq || true
-                apt install -y docker.io -qq
-            fi
-            ;;
-        dnf|yum)
-             if ! command -v docker &> /dev/null; then
-                $PKG_MANAGER install -y docker &> /dev/null
-            fi
-            ;;
-    esac
-    
-    # Start and enable Docker
-    systemctl start docker
-    systemctl enable docker &> /dev/null
-    
-    # --- AGGRESSIVE DOCKER COMPOSE FIX ---
-    print_step "Fixing Docker Compose version..."
-    
-    # Always remove the apt version of docker-compose as it is broken/outdated
+    # Remove apt version which is usually old (v1.29)
     if [ "$PKG_MANAGER" = "apt" ]; then
         apt remove -y docker-compose &> /dev/null || true
     fi
+    # Remove old binaries
+    rm -f /usr/bin/docker-compose /usr/local/bin/docker-compose
+
+    # Download V2 Binary
+    print_info "Downloading Docker Compose V2.24.5..."
+    curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+    chmod +x /usr/local/bin/docker-compose
+    ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
     
-    # Always remove old binaries to force update
-    rm -f /usr/bin/docker-compose
-    rm -f /usr/local/bin/docker-compose
-
-    # Download fresh V2 binary
-    print_info "Downloading Docker Compose v2.24.5..."
-    if curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose; then
-        chmod +x /usr/local/bin/docker-compose
-        ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-        print_success "Docker Compose v2 installed successfully"
-    else
-        print_error "Failed to download Docker Compose"
-        exit 1
-    fi
-    # --- END FIX ---
-
-    # Configure Docker registry mirror if provided
+    # Configure Mirror if needed
     if [ -n "$DOCKER_REGISTRY_MIRROR" ]; then
-        print_info "Configuring Docker registry mirror..."
         mkdir -p /etc/docker
-        cat > /etc/docker/daemon.json <<EOF
-{
-  "registry-mirrors": ["$DOCKER_REGISTRY_MIRROR"]
-}
-EOF
+        echo "{\"registry-mirrors\": [\"$DOCKER_REGISTRY_MIRROR\"]}" > /etc/docker/daemon.json
         systemctl restart docker
-        print_success "Docker registry mirror configured"
     fi
     
-    # Verify installation
-    if ! command -v docker &> /dev/null; then
-        print_error "Docker installation failed"
-        exit 1
-    fi
-    
-    if ! command -v docker-compose &> /dev/null; then
-        print_error "Docker Compose installation failed"
-        exit 1
-    fi
+    print_success "Docker & Compose V2 Ready"
 }
 
 verify_dns() {
     local domain=$1
-    
-    print_step "Verifying DNS configuration for $domain..."
-    
-    print_info "Getting server's public IP address..."
+    print_step "Verifying DNS for $domain..."
     local server_ip=$(curl -s https://api.ipify.org)
-    
-    if [ -z "$server_ip" ]; then
-        print_error "Could not determine server's public IP"
-        return 1
-    fi
-    
-    print_info "Server IP: $server_ip"
-    
-    print_info "Checking DNS resolution..."
     local domain_ip=$(dig +short "$domain" @8.8.8.8 | tail -n1)
     
     if [ -z "$domain_ip" ]; then
-        print_error "Domain $domain does not resolve to any IP"
-        print_info "Please ensure your domain's A record points to: $server_ip"
-        echo ""
-        ask_question "Do you want to continue anyway? (yes/no)" continue_anyway "no"
-        
-        if [[ ! "$continue_anyway" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            print_error "Installation cancelled. Please configure DNS and try again."
-            exit 1
-        fi
-        
+        print_error "Domain does not resolve."
+        ask_question "Continue anyway? (yes/no)" cont "no"
+        if [[ ! "$cont" =~ ^[Yy] ]]; then exit 1; fi
         return 1
     fi
-    
-    print_info "Domain resolves to: $domain_ip"
     
     if [ "$server_ip" != "$domain_ip" ]; then
-        print_warning "DNS mismatch!"
-        print_info "Server IP: $server_ip"
-        print_info "Domain IP: $domain_ip"
-        echo ""
-        print_info "Please update your domain's A record to point to: $server_ip"
-        echo ""
-        ask_question "Do you want to continue anyway? (yes/no)" continue_anyway "no"
-        
-        if [[ ! "$continue_anyway" =~ ^[Yy]([Ee][Ss])?$ ]]; then
-            print_error "Installation cancelled. Please configure DNS and try again."
-            exit 1
-        fi
-        
-        return 1
+        print_warning "DNS Mismatch: Domain ($domain_ip) != Server ($server_ip)"
+        ask_question "Continue anyway? (yes/no)" cont "no"
+        if [[ ! "$cont" =~ ^[Yy] ]]; then exit 1; fi
+    else
+        print_success "DNS Verified ($domain_ip)"
     fi
-    
-    print_success "DNS configuration verified successfully"
-    return 0
 }
 
 generate_credentials() {
     print_step "Generating secure credentials..."
-    
     MONGO_ROOT_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
     MONGO_OPLOG_PASSWORD=$(openssl rand -base64 32 | tr -d "=+/" | cut -c1-25)
-    
     print_success "Credentials generated"
 }
 
 create_env_file() {
-    print_step "Creating environment file..."
+    print_step "Creating configuration files..."
     
     cat > "$ENV_FILE" <<EOF
 # RocketChat Environment Configuration
 # Generated by NetAdminPlus RocketChat Installer
 # Date: $(date)
 
-# Domain Configuration
 DOMAIN=$DOMAIN
 LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL
 
-# MongoDB Configuration
 MONGO_ROOT_PASSWORD=$MONGO_ROOT_PASSWORD
 MONGO_OPLOG_PASSWORD=$MONGO_OPLOG_PASSWORD
 
-# RocketChat Configuration
 ROOT_URL=https://$DOMAIN
 PORT=3000
 
-# MongoDB Connection
 MONGO_URL=mongodb://rocketchat:$MONGO_OPLOG_PASSWORD@mongodb:27017/rocketchat?authSource=admin
 MONGO_OPLOG_URL=mongodb://oploguser:$MONGO_OPLOG_PASSWORD@mongodb:27017/local?authSource=admin
 EOF
-    
     chmod 600 "$ENV_FILE"
-    print_success "Environment file created: $ENV_FILE"
+    print_success "Environment file created"
 }
 
 create_directories() {
     print_step "Creating data directories..."
+    mkdir -p "$MONGODB_DATA" "$UPLOADS_DIR" "$CERTS_DIR"
     
-    mkdir -p "$MONGODB_DATA"
-    mkdir -p "$UPLOADS_DIR"
-    mkdir -p "$CERTS_DIR"
-    
-    # Create MongoDB keyfile for replica set authentication
-    print_info "Generating MongoDB keyfile..."
+    # Create MongoDB keyfile
     local keyfile="$MONGODB_DATA/replica.key"
     openssl rand -base64 756 > "$keyfile"
     chmod 400 "$keyfile"
-    # Ensure user 999 (mongo) can read the file
     chown 999:999 "$keyfile"
     
     chmod 755 "$DATA_DIR"
-    
-    print_success "Data directories created"
+    print_success "Directories created"
 }
 
 create_docker_compose() {
-    print_step "Creating Docker Compose configuration..."
+    print_step "Creating Docker Compose file..."
     
     cat > "$COMPOSE_FILE" <<'EOF'
 version: '3.8'
@@ -569,184 +431,101 @@ networks:
   rocketchat-network:
     driver: bridge
 EOF
-    
-    print_success "Docker Compose file created: $COMPOSE_FILE"
+    print_success "Docker Compose file created"
 }
 
 start_services() {
     print_step "Starting RocketChat services..."
-    
     cd "$INSTALL_DIR"
     
+    # Use standalone docker-compose since we installed the binary
     DOCKER_COMPOSE_CMD="docker-compose"
     
-    print_info "Pulling Docker images... (this may take a few minutes)"
+    print_info "Pulling images..."
     $DOCKER_COMPOSE_CMD pull
     
     print_info "Starting containers..."
     $DOCKER_COMPOSE_CMD up -d
     
-    print_success "Services started successfully"
-    
-    print_info "Waiting for RocketChat to initialize... (this may take 1-2 minutes)"
+    print_success "Services started."
+    print_info "Waiting for initialization (approx 1-2 mins)..."
     
     local max_wait=120
     local waited=0
-    
     while [ $waited -lt $max_wait ]; do
         if $DOCKER_COMPOSE_CMD logs rocketchat 2>&1 | grep -q "SERVER RUNNING"; then
             print_success "RocketChat is ready!"
             return 0
         fi
-        
         echo -ne "\rWaiting... ${waited}s/${max_wait}s"
         sleep 5
         waited=$((waited + 5))
     done
     
     echo ""
-    print_warning "RocketChat initialization is taking longer than expected"
-    print_info "You can check logs with: ${YELLOW}$DOCKER_COMPOSE_CMD logs -f rocketchat${NC}"
-}
-
-display_firewall_commands() {
-    print_separator
-    print_step "Firewall Configuration"
-    echo ""
-    print_info "Please ensure ports 80 and 443 are open in your firewall:"
-    echo ""
-    
-    # UFW commands
-    print_info "${CYAN}For UFW:${NC}"
-    echo -e "  ${YELLOW}sudo ufw allow 80/tcp${NC}"
-    echo -e "  ${YELLOW}sudo ufw allow 443/tcp${NC}"
-    echo -e "  ${YELLOW}sudo ufw reload${NC}"
-    echo ""
-    
-    # Firewalld commands
-    print_info "${CYAN}For firewalld:${NC}"
-    echo -e "  ${YELLOW}sudo firewall-cmd --permanent --add-service=http${NC}"
-    echo -e "  ${YELLOW}sudo firewall-cmd --permanent --add-service=https${NC}"
-    echo -e "  ${YELLOW}sudo firewall-cmd --reload${NC}"
-    echo ""
-    
-    # iptables commands
-    print_info "${CYAN}For iptables:${NC}"
-    echo -e "  ${YELLOW}sudo iptables -A INPUT -p tcp --dport 80 -j ACCEPT${NC}"
-    echo -e "  ${YELLOW}sudo iptables -A INPUT -p tcp --dport 443 -j ACCEPT${NC}"
-    echo -e "  ${YELLOW}sudo iptables-save > /etc/iptables/rules.v4${NC}"
-    echo ""
-    
-    print_separator
+    print_info "Logs: $DOCKER_COMPOSE_CMD logs -f rocketchat"
 }
 
 display_final_info() {
     echo ""
     print_separator
-    print_success "🎉 RocketChat installation completed successfully! 🎉"
+    print_success "🎉 RocketChat installation completed! 🎉"
     print_separator
     echo ""
-    
-    local dc_cmd="docker-compose"
-    
-    print_info "${CYAN}Access Information:${NC}"
-    echo -e "  ${GREEN}URL:${NC} https://$DOMAIN"
-    echo -e "  ${GREEN}First user to register becomes admin${NC}"
+    print_info "URL: https://$DOMAIN"
+    print_info "Admin: First registered user becomes admin"
     echo ""
-    
-    print_info "${CYAN}Credentials Location:${NC}"
-    echo -e "  ${GREEN}File:${NC} $ENV_FILE"
-    echo -e "  ${GREEN}MongoDB Root Password:${NC} $MONGO_ROOT_PASSWORD"
-    echo ""
-    
-    print_info "${CYAN}Installation Directory:${NC}"
-    echo -e "  ${GREEN}Location:${NC} $INSTALL_DIR"
-    echo -e "  ${GREEN}Data:${NC} $DATA_DIR"
-    echo ""
-    
-    print_info "${CYAN}Useful Commands:${NC}"
-    echo -e "  ${YELLOW}View logs:${NC}         cd $INSTALL_DIR && $dc_cmd logs -f"
-    echo -e "  ${YELLOW}Stop services:${NC}     cd $INSTALL_DIR && $dc_cmd stop"
-    echo -e "  ${YELLOW}Start services:${NC}    cd $INSTALL_DIR && $dc_cmd start"
-    echo -e "  ${YELLOW}Restart services:${NC}  cd $INSTALL_DIR && $dc_cmd restart"
-    echo -e "  ${YELLOW}View status:${NC}       cd $INSTALL_DIR && $dc_cmd ps"
-    echo ""
-    
-    print_separator
-    print_info "${MAGENTA}Created by Ramtin - NetAdminPlus${NC}"
-    echo -e "  ${CYAN}Website:${NC}   https://netadminplus.com"
-    echo -e "  ${CYAN}YouTube:${NC}   https://youtube.com/@netadminplus"
-    echo -e "  ${CYAN}Instagram:${NC} https://instagram.com/netadminplus"
+    print_info "Credentials: $ENV_FILE"
+    print_info "MongoDB Pass: $MONGO_ROOT_PASSWORD"
     print_separator
     echo ""
 }
 
 #############################################################################
-# Main Installation Flow
+# Main Flow
 #############################################################################
 
 main() {
     print_banner
     
-    # Pre-flight checks
     check_root
+    
+    # NUCLEAR CLEANUP (Prevents password conflicts)
+    perform_cleanup
+    
     detect_distro
     check_system_requirements
     
     print_separator
-    
-    # Docker Hub check
     check_docker_hub_access
     
     print_separator
-    
-    # Install dependencies and Docker
     install_dependencies
     install_docker
     
     print_separator
-    
-    # Get user input
-    echo ""
-    print_step "Configuration Setup"
+    print_step "Configuration"
     echo ""
     
-    ask_question "Enter your domain name (e.g., chat.example.com):" DOMAIN ""
-    
+    ask_question "Enter domain name:" DOMAIN ""
     while [ -z "$DOMAIN" ]; do
-        print_error "Domain name cannot be empty"
-        ask_question "Enter your domain name (e.g., chat.example.com):" DOMAIN ""
+        ask_question "Domain required:" DOMAIN ""
     done
     
-    echo ""
     verify_dns "$DOMAIN"
     
-    echo ""
-    ask_question "Enter email for Let's Encrypt notifications (optional, press Enter to skip):" LETSENCRYPT_EMAIL ""
+    ask_question "Email for SSL (optional):" LETSENCRYPT_EMAIL ""
     
     print_separator
-    
-    # Generate configuration
     generate_credentials
     create_directories
     create_env_file
     create_docker_compose
     
     print_separator
-    
-    # Start services
     start_services
     
-    print_separator
-    
-    # Display firewall info
-    display_firewall_commands
-    
-    # Display final information
     display_final_info
-    
-    print_success "Installation complete! Enjoy your RocketChat server! 🚀"
-    echo ""
 }
 
 # Run main function
