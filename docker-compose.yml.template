@@ -76,3 +76,5 @@ services:
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "./data/certs:/letsencrypt"
+    environment:
+      - DOCKER_CLIENT_API_VERSION=1.44
