@@ -55,25 +55,41 @@ fi
 # --- 3. Configuration Gathering ---
 print_step "Configuration Setup"
 
-# Domain
-read -p "1. Enter your Domain (e.g., chat.mydomain.com): " DOMAIN < /dev/tty
-if [ -z "$DOMAIN" ]; then print_error "Domain is required!"; exit 1; fi
+# Check if .env already exists to avoid overwriting passwords
+if [ -f .env ]; then
+    echo -e "${YELLOW}    Existing configuration (.env) found!${NC}"
+    read -p "    Do you want to use the existing configuration? (y/n): " USE_EXISTING < /dev/tty
+    if [[ "$USE_EXISTING" == "y" || "$USE_EXISTING" == "Y" ]]; then
+        # Load existing variables
+        export $(grep -v '^#' .env | xargs)
+        print_success "Loaded existing configuration."
+        SKIP_GENERATION=true
+    else
+        print_info "Starting fresh configuration..."
+    fi
+fi
 
-# Email for SSL
-read -p "2. Email for SSL Alerts (optional, enter to skip): " EMAIL < /dev/tty
-if [ -z "$EMAIL" ]; then EMAIL="admin@$DOMAIN"; fi
+if [ "$SKIP_GENERATION" != "true" ]; then
+    # Domain
+    read -p "1. Enter your Domain (e.g., chat.mydomain.com): " DOMAIN < /dev/tty
+    if [ -z "$DOMAIN" ]; then print_error "Domain is required!"; exit 1; fi
 
-# Version
-read -p "3. Rocket.Chat Version (default: latest): " RC_VERSION < /dev/tty
-RC_VERSION=${RC_VERSION:-latest}
+    # Email for SSL
+    read -p "2. Email for SSL Alerts (optional, enter to skip): " EMAIL < /dev/tty
+    if [ -z "$EMAIL" ]; then EMAIL="admin@$DOMAIN"; fi
 
-# Mirror Check
-print_info "Checking Docker Hub accessibility..."
-if curl --connect-timeout 3 -s https://hub.docker.com >/dev/null; then
-    print_success "Docker Hub is accessible."
-else
-    echo -e "${YELLOW}    Warning: Docker Hub seems blocked.${NC}"
-    read -p "    Enter a Docker Mirror URL (e.g., https://docker.iranserver.com) or press Enter to skip: " DOCKER_MIRROR < /dev/tty
+    # Version
+    read -p "3. Rocket.Chat Version (default: latest): " RC_VERSION < /dev/tty
+    RC_VERSION=${RC_VERSION:-latest}
+
+    # Mirror Check
+    print_info "Checking Docker Hub accessibility..."
+    if curl --connect-timeout 3 -s https://hub.docker.com >/dev/null; then
+        print_success "Docker Hub is accessible."
+    else
+        echo -e "${YELLOW}    Warning: Docker Hub seems blocked.${NC}"
+        read -p "    Enter a Docker Mirror URL (e.g., https://docker.iranserver.com) or press Enter to skip: " DOCKER_MIRROR < /dev/tty
+    fi
 fi
 
 # --- 4. DNS Verification ---
@@ -135,28 +151,34 @@ fi
 
 print_step "Generating Environment"
 
-# Generate Random Passwords
-MONGO_PASS=$(openssl rand -hex 16)
-MONGO_USER="root"
+if [ "$SKIP_GENERATION" != "true" ]; then
+    # Generate Random Passwords
+    MONGO_PASS=$(openssl rand -hex 16)
+    MONGO_USER="root"
 
-# Create .env file
-echo "DOMAIN=$DOMAIN" > .env
-echo "LETSENCRYPT_EMAIL=$EMAIL" >> .env
-echo "RC_VERSION=$RC_VERSION" >> .env
-echo "MONGO_USER=$MONGO_USER" >> .env
-echo "MONGO_PASS=$MONGO_PASS" >> .env
+    # Create .env file
+    echo "DOMAIN=$DOMAIN" > .env
+    echo "LETSENCRYPT_EMAIL=$EMAIL" >> .env
+    echo "RC_VERSION=$RC_VERSION" >> .env
+    echo "MONGO_USER=$MONGO_USER" >> .env
+    echo "MONGO_PASS=$MONGO_PASS" >> .env
+    
+    print_info "New passwords generated."
+else
+    print_info "Using existing passwords from .env"
+fi
 
-# --- CRITICAL FIX: Generate MongoDB KeyFile ---
-print_info "Generating MongoDB KeyFile..."
-openssl rand -base64 756 > mongodb.key
-chmod 400 mongodb.key
-# Attempt to set ownership to default mongo user (999) if possible, otherwise rely on read permissions
-chown 999:999 mongodb.key 2>/dev/null || true
-print_success "KeyFile generated."
+# --- KeyFile Check ---
+if [ ! -f mongodb.key ]; then
+    print_info "Generating MongoDB KeyFile..."
+    openssl rand -base64 756 > mongodb.key
+    chmod 400 mongodb.key
+    chown 999:999 mongodb.key 2>/dev/null || true
+    print_success "KeyFile generated."
+fi
 
-# Generate docker-compose.yml
+# Always copy template to update it
 cp docker-compose.yml.template docker-compose.yml
-
 print_success "Configuration generated."
 
 # --- 7. Start Services ---
