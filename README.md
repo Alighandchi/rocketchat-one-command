@@ -1,4 +1,8 @@
-# 🚀 RocketChat Deploy - One-Click Installer
+**English** | [فارسی](README.fa.md)
+
+---
+
+# 🚀 RocketChat One-Command Installer
 
 <div align="center">
 
@@ -6,7 +10,7 @@
 ![Docker](https://img.shields.io/badge/Docker-Required-blue)
 ![License](https://img.shields.io/badge/License-MIT-green)
 
-**Easy RocketChat deployment for Iranian users with Docker, SSL, and automatic configuration**
+**Easy RocketChat deployment with Docker, SSL, and automatic configuration**
 
 Created by [Ramtin - NetAdminPlus](https://netadminplus.com)
 
@@ -27,6 +31,7 @@ Created by [Ramtin - NetAdminPlus](https://netadminplus.com)
 - 🔄 **DNS verification** - Checks domain configuration
 - 🛡️ **Multi-distro support** - Ubuntu, Debian, Rocky Linux, CentOS, AlmaLinux
 - 📁 **Organized structure** - All assets in one directory
+- ⚠️ **Flexible requirements** - Install with warnings if system doesn't meet minimum specs
 
 ---
 
@@ -47,7 +52,16 @@ Created by [Ramtin - NetAdminPlus](https://netadminplus.com)
 
 ## 🚀 Quick Start
 
-### One-Line Installation
+### Recommended: Download and Run
+```bash
+curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh -o rocketchat-installer.sh
+chmod +x rocketchat-installer.sh
+sudo ./rocketchat-installer.sh
+```
+
+### Alternative: One-Line Installation
+
+⚠️ **Note**: The one-line method may have issues with interactive prompts. Use the download method above if you encounter problems.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh | sudo bash
 ```
@@ -93,7 +107,7 @@ The installer will:
 
 After installation, your directory will contain:
 ```
-rocketchat-deploy/
+rocketchat-one-command/
 ├── docker-compose.yml       # Docker Compose configuration
 ├── .env                      # Environment variables & credentials
 ├── data/
@@ -201,7 +215,7 @@ rm -rf data/
 - 📺 **YouTube**: [@netadminplus](https://youtube.com/@netadminplus)
 - 🌐 **Website**: [netadminplus.com](https://netadminplus.com)
 - 📸 **Instagram**: [@netadminplus](https://instagram.com/netadminplus)
-- 🐛 **Issues**: [GitHub Issues](https://github.com/netadminplus/rocketchat-deploy/issues)
+- 🐛 **Issues**: [GitHub Issues](https://github.com/netadminplus/rocketchat-one-command/issues)
 
 ---
 
