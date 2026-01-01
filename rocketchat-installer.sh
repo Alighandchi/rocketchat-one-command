@@ -53,12 +53,38 @@ else
     exit 1
 fi
 
-# --- 3. Configuration Gathering ---
+# --- 3. Directory Setup (NEW SECTION) ---
+print_step "Installation Directory"
+
+# Default to a clean directory in the user's home
+DEFAULT_DIR="$HOME/netadminplus-rocketchat"
+
+echo -e "    Default installation path: ${CYAN}$DEFAULT_DIR${NC}"
+read -p "    Do you want to install here? (y/n): " DIR_CONFIRM < /dev/tty
+DIR_CONFIRM=${DIR_CONFIRM:-y} # Default to yes
+
+if [[ "$DIR_CONFIRM" =~ ^[Nn]$ ]]; then
+    read -p "    Enter custom directory path: " INSTALL_DIR < /dev/tty
+else
+    INSTALL_DIR="$DEFAULT_DIR"
+fi
+
+# Create and enter directory
+if [ ! -d "$INSTALL_DIR" ]; then
+    mkdir -p "$INSTALL_DIR"
+    print_success "Created directory: $INSTALL_DIR"
+fi
+
+cd "$INSTALL_DIR" || { print_error "Could not access directory $INSTALL_DIR"; exit 1; }
+print_success "Working directory set to: $(pwd)"
+
+
+# --- 4. Configuration Gathering ---
 print_step "Configuration Setup"
 
-# Check if .env already exists to avoid overwriting passwords
+# Check if .env already exists inside the specific directory
 if [ -f .env ]; then
-    echo -e "${YELLOW}    Existing configuration (.env) found!${NC}"
+    echo -e "${YELLOW}    Existing configuration (.env) found in $(pwd)!${NC}"
     read -p "    Do you want to use the existing configuration? (y/n): " USE_EXISTING < /dev/tty
     if [[ "$USE_EXISTING" == "y" || "$USE_EXISTING" == "Y" ]]; then
         # Load existing variables
@@ -93,7 +119,7 @@ if [ "$SKIP_GENERATION" != "true" ]; then
     fi
 fi
 
-# --- 4. DNS Verification ---
+# --- 5. DNS Verification ---
 print_step "Verifying DNS"
 PUBLIC_IP=$(curl -s --max-time 5 https://api.ipify.org || curl -s --max-time 5 https://ifconfig.me/ip)
 print_info "Server Public IP: $PUBLIC_IP"
@@ -111,7 +137,7 @@ if command -v host &> /dev/null; then
     fi
 fi
 
-# --- 5. Install Docker ---
+# --- 6. Install Docker ---
 print_step "Installing/Updating Docker"
 
 if ! command -v docker &> /dev/null; then
@@ -137,7 +163,7 @@ if [ -n "$DOCKER_MIRROR" ]; then
     fi
 fi
 
-# --- 6. Download & Generate Config ---
+# --- 7. Download & Generate Config ---
 print_step "Downloading Configuration Template"
 TEMPLATE_FILE="docker-compose.yml.template"
 rm -f "$TEMPLATE_FILE"
@@ -182,7 +208,7 @@ fi
 cp docker-compose.yml.template docker-compose.yml
 print_success "Configuration generated."
 
-# --- 7. Start Services ---
+# --- 8. Start Services ---
 print_step "Starting Services"
 
 if ! docker compose version &> /dev/null; then
@@ -197,7 +223,7 @@ if [ $? -ne 0 ]; then
     exit 1
 fi
 
-# --- 8. Wait for Rocket.Chat to be Ready (NEW SECTION) ---
+# --- 9. Wait for Rocket.Chat to be Ready ---
 echo ""
 print_info "Containers started. Waiting for Rocket.Chat to initialize..."
 print_info "This usually takes 60-90 seconds (DB migration & startup)."
@@ -211,19 +237,12 @@ while [ $(date +%s) -lt $END_TIME ]; do
     CURRENT_TIME=$(date +%s)
     ELAPSED=$((CURRENT_TIME - START_TIME))
     
-    # Check if we can find the "SERVER RUNNING" log or similar indication
-    # Or simpler: check if the container is healthy/running
-    # Note: Rocket.Chat is ready when it starts listening.
-    
     # We check the logs for the specific success message
     if docker compose logs --tail=20 2>/dev/null | grep -q "SERVER RUNNING"; then
         printf "\r\033[K" # Clear line
         print_success "Rocket.Chat is UP and RUNNING!"
         break
     fi
-    
-    # Also check if Traefik is responding (if app is up, Traefik routes it)
-    # This is a secondary check in case logs are verbose/different
     
     SPINNER="-\|/"
     SPIN_IDX=$((ELAPSED % 4))
@@ -235,7 +254,7 @@ done
 # If loop finishes and we are still here, we just proceed.
 printf "\r\033[K" # Clear the spinner line
 
-# --- 9. Final Output ---
+# --- 10. Final Output ---
 print_banner
 echo -e "${GREEN}   INSTALLATION SUCCESSFUL!${NC}"
 echo -e "   --------------------------------------------------------------"
@@ -245,6 +264,27 @@ echo -e "   Data Directory:   $(pwd)"
 echo -e "   MongoDB User:     $MONGO_USER"
 echo -e "   MongoDB Pass:     (Check .env file)"
 echo -e "   --------------------------------------------------------------"
-echo -e "   ${CYAN}Note: If the site shows 'Bad Gateway' initially, please wait${NC}"
-echo -e "   ${CYAN}another 30 seconds for the database to finish syncing.${NC}"
-echo -e "   To view logs: docker compose logs -f"
+echo -e "   ${CYAN}To view logs: docker compose logs -f${NC}"
+
+# --- 11. Firewall Instructions (NEW SECTION) ---
+print_step "Firewall Configuration (Manual Action Required)"
+print_info "For your site to be accessible, you MUST open ports 80 and 443."
+echo ""
+
+if command -v ufw >/dev/null; then
+    echo -e "${YELLOW}   Detected UFW (Ubuntu/Debian): Run these commands:${NC}"
+    echo -e "   sudo ufw allow 80/tcp"
+    echo -e "   sudo ufw allow 443/tcp"
+    echo -e "   sudo ufw reload"
+elif command -v firewall-cmd >/dev/null; then
+    echo -e "${YELLOW}   Detected Firewalld (CentOS/Rocky/Alma): Run these commands:${NC}"
+    echo -e "   sudo firewall-cmd --permanent --add-service=http"
+    echo -e "   sudo firewall-cmd --permanent --add-service=https"
+    echo -e "   sudo firewall-cmd --reload"
+else
+    echo -e "${YELLOW}   Unknown Firewall. Please manually open TCP ports 80 and 443.${NC}"
+    echo -e "   Example (iptables):"
+    echo -e "   iptables -A INPUT -p tcp --dport 80 -j ACCEPT"
+    echo -e "   iptables -A INPUT -p tcp --dport 443 -j ACCEPT"
+fi
+echo ""
