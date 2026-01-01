@@ -1,75 +1,69 @@
 version: '3.8'
 
 services:
-  traefik:
-    image: traefik:v2.10
-    restart: always
-    command:
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-      - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
-      - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
-      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "traefik-certificates:/letsencrypt"
-
   rocketchat:
-    image: registry.rocket.chat/rocketchat/rocket.chat:${RC_VERSION}
+    image: rocket.chat:${RC_VERSION:-latest}
     restart: always
-    volumes:
-      - uploads:/app/uploads
+    command: >
+      bash -c "for i in `seq 1 30`; do
+        node main.js &&
+        s=$$? && break || s=$$?;
+        echo \"Tried $$i times. Waiting 5 secs...\";
+        sleep 5;
+      done; (exit $$s)"
     environment:
-      - PORT=3000
+      - MONGO_URL=mongodb://${MONGO_USER}:${MONGO_PASS}@mongodb:27017/rocketchat?authSource=admin
+      - MONGO_OPLOG_URL=mongodb://${MONGO_USER}:${MONGO_PASS}@mongodb:27017/local?authSource=admin
       - ROOT_URL=https://${DOMAIN}
-      - MONGO_URL=mongodb://${MONGO_USER}:${MONGO_PASS}@mongodb:27017/rocketchat?authSource=admin&replicaSet=rs0&directConnection=true
-      - MONGO_OPLOG_URL=mongodb://${MONGO_USER}:${MONGO_PASS}@mongodb:27017/local?authSource=admin&replicaSet=rs0&directConnection=true
+      - PORT=3000
+      - DEPLOY_METHOD=docker
+      - ACCOUNTS_AVATAR_STORE_TYPE=GridFS
+      - FILE_UPLOAD_FILESYSTEM_PATH=/app/uploads
+    volumes:
+      - ./data/uploads:/app/uploads
+    depends_on:
+      - mongodb
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.rocketchat.rule=Host(`${DOMAIN}`)"
       - "traefik.http.routers.rocketchat.entrypoints=websecure"
       - "traefik.http.routers.rocketchat.tls.certresolver=myresolver"
-      - "traefik.http.services.rocketchat.loadbalancer.server.port=3000"
-    depends_on:
-      - mongodb
 
   mongodb:
-    image: mongo:5.0
+    image: bitnami/mongodb:5.0
     restart: always
-    volumes:
-      - db-data:/data/db
-      - db-dump:/dump
-      - ./mongodb.key:/opt/mongodb/mongodb.key:ro
-    command: mongod --oplogSize 128 --replSet rs0 --bind_ip_all --auth --keyFile /opt/mongodb/mongodb.key
     environment:
-      - MONGO_INITDB_ROOT_USERNAME=${MONGO_USER}
-      - MONGO_INITDB_ROOT_PASSWORD=${MONGO_PASS}
-    expose:
-      - 27017
+      - MONGODB_ADVERTISED_HOSTNAME=mongodb
+      - MONGODB_INITIAL_PRIMARY_HOST=mongodb
+      - MONGODB_INITIAL_PRIMARY_PORT_NUMBER=27017
+      - MONGODB_INITIAL_PRIMARY_ROOT_PASSWORD=${MONGO_PASS}
+      - MONGODB_INITIAL_PRIMARY_ROOT_USER=${MONGO_USER}
+      - MONGODB_REPLICA_SET_MODE=primary
+      - MONGODB_REPLICA_SET_KEY=replica_set_key
+      - MONGODB_REPLICA_SET_NAME=rs0
+    volumes:
+      - ./data/mongodb:/bitnami/mongodb
+    user: root # Required to fix permissions on the bind mount
 
-  # Automatic Replica Set Initialization
-  mongo-init-replica:
-    image: mongo:5.0
-    restart: "no"
-    command: >
-      bash -c "for i in `seq 1 30`; do
-        mongosh mongodb/rocketchat --quiet --authenticationDatabase admin -u ${MONGO_USER} -p ${MONGO_PASS} --eval \"rs.initiate({ _id: 'rs0', members: [ { _id: 0, host: 'mongodb:27017' } ]})\" &&
-        s=$$? && break || s=$$?;
-        echo \"Tried $$i times. Waiting 5 secs...\";
-        sleep 5;
-      done; (exit $$s)"
-    depends_on:
-      - mongodb
-
-volumes:
-  uploads:
-  db-data:
-  db-dump:
-  traefik-certificates:
+  traefik:
+    image: traefik:v2.10
+    restart: always
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      # Redirect HTTP to HTTPS
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./data/certs:/letsencrypt"
