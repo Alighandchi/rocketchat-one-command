@@ -270,7 +270,7 @@ install_docker() {
     
     case $PKG_MANAGER in
         apt)
-            # Remove old repo configs to avoid 403 errors
+            # Remove old repo configs
             rm -f /etc/apt/sources.list.d/docker.list
             rm -f /etc/apt/sources.list.d/docker.sources
             rm -f /etc/apt/keyrings/docker.gpg
@@ -294,34 +294,29 @@ install_docker() {
     systemctl start docker
     systemctl enable docker &> /dev/null
     
-    # --- DOCKER COMPOSE FIX START ---
-    # Check if we have the old python-based docker-compose (v1.x)
-    # This version causes "KeyError: ContainerConfig" with newer Docker Engines
-    if command -v docker-compose &> /dev/null; then
-        if docker-compose --version | grep -q "version 1."; then
-            print_warning "Detected legacy Docker Compose v1 (Incompatible). Removing..."
-            if [ "$PKG_MANAGER" = "apt" ]; then
-                apt remove -y docker-compose &> /dev/null || true
-            else
-                $PKG_MANAGER remove -y docker-compose &> /dev/null || true
-            fi
-            rm -f /usr/bin/docker-compose
-            rm -f /usr/local/bin/docker-compose
-        fi
+    # --- AGGRESSIVE DOCKER COMPOSE FIX ---
+    print_step "Fixing Docker Compose version..."
+    
+    # Always remove the apt version of docker-compose as it is broken/outdated
+    if [ "$PKG_MANAGER" = "apt" ]; then
+        apt remove -y docker-compose &> /dev/null || true
     fi
+    
+    # Always remove old binaries to force update
+    rm -f /usr/bin/docker-compose
+    rm -f /usr/local/bin/docker-compose
 
-    # Install standalone binary v2.x if missing
-    if ! command -v docker-compose &> /dev/null; then
-        print_info "Downloading Docker Compose v2 standalone..."
-        # Using v2.24.5 which is stable
-        curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+    # Download fresh V2 binary
+    print_info "Downloading Docker Compose v2.24.5..."
+    if curl -SL https://github.com/docker/compose/releases/download/v2.24.5/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose; then
         chmod +x /usr/local/bin/docker-compose
         ln -sf /usr/local/bin/docker-compose /usr/bin/docker-compose
-        print_success "Docker Compose v2 installed"
+        print_success "Docker Compose v2 installed successfully"
     else
-         print_success "Docker Compose is already v2+"
+        print_error "Failed to download Docker Compose"
+        exit 1
     fi
-    # --- DOCKER COMPOSE FIX END ---
+    # --- END FIX ---
 
     # Configure Docker registry mirror if provided
     if [ -n "$DOCKER_REGISTRY_MIRROR" ]; then
