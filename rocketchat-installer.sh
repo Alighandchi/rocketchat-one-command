@@ -9,6 +9,7 @@
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 RED='\033[0;31m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 print_banner() {
@@ -188,21 +189,62 @@ if ! docker compose version &> /dev/null; then
     $PKG_MANAGER install -y docker-compose-plugin &> /dev/null
 fi
 
+# Start Docker containers
 docker compose up -d
 
-if [ $? -eq 0 ]; then
-    print_banner
-    echo -e "${GREEN}   INSTALLATION SUCCESSFUL!${NC}"
-    echo -e "   --------------------------------------------------------------"
-    echo -e "   Rocket.Chat URL:  https://$DOMAIN"
-    echo -e "   SSL Status:       Auto-configured via Traefik (Let's Encrypt)"
-    echo -e "   Data Directory:   $(pwd)"
-    echo -e "   MongoDB User:     $MONGO_USER"
-    echo -e "   MongoDB Pass:     (Check .env file)"
-    echo -e "   --------------------------------------------------------------"
-    echo -e "   Note: It may take 1-2 minutes for the server to start fully."
-    echo -e "   To view logs: docker compose logs -f"
-else
+if [ $? -ne 0 ]; then
     print_error "Docker failed to start."
     exit 1
 fi
+
+# --- 8. Wait for Rocket.Chat to be Ready (NEW SECTION) ---
+echo ""
+print_info "Containers started. Waiting for Rocket.Chat to initialize..."
+print_info "This usually takes 60-90 seconds (DB migration & startup)."
+
+# Visual Countdown / Check Loop
+TIMEOUT_SEC=120
+START_TIME=$(date +%s)
+END_TIME=$((START_TIME + TIMEOUT_SEC))
+
+while [ $(date +%s) -lt $END_TIME ]; do
+    CURRENT_TIME=$(date +%s)
+    ELAPSED=$((CURRENT_TIME - START_TIME))
+    
+    # Check if we can find the "SERVER RUNNING" log or similar indication
+    # Or simpler: check if the container is healthy/running
+    # Note: Rocket.Chat is ready when it starts listening.
+    
+    # We check the logs for the specific success message
+    if docker compose logs --tail=20 2>/dev/null | grep -q "SERVER RUNNING"; then
+        printf "\r\033[K" # Clear line
+        print_success "Rocket.Chat is UP and RUNNING!"
+        break
+    fi
+    
+    # Also check if Traefik is responding (if app is up, Traefik routes it)
+    # This is a secondary check in case logs are verbose/different
+    
+    SPINNER="-\|/"
+    SPIN_IDX=$((ELAPSED % 4))
+    printf "\r[${SPINNER:$SPIN_IDX:1}] Finalizing setup... (${ELAPSED}s)"
+    
+    sleep 2
+done
+
+# If loop finishes and we are still here, we just proceed.
+printf "\r\033[K" # Clear the spinner line
+
+# --- 9. Final Output ---
+print_banner
+echo -e "${GREEN}   INSTALLATION SUCCESSFUL!${NC}"
+echo -e "   --------------------------------------------------------------"
+echo -e "   Rocket.Chat URL:  https://$DOMAIN"
+echo -e "   SSL Status:       Auto-configured via Traefik (Let's Encrypt)"
+echo -e "   Data Directory:   $(pwd)"
+echo -e "   MongoDB User:     $MONGO_USER"
+echo -e "   MongoDB Pass:     (Check .env file)"
+echo -e "   --------------------------------------------------------------"
+echo -e "   ${CYAN}Note: If the site shows 'Bad Gateway' initially, please wait${NC}"
+echo -e "   ${CYAN}another 30 seconds for the database to finish syncing.${NC}"
+echo -e "   To view logs: docker compose logs -f"
