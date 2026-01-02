@@ -78,13 +78,17 @@ fi
 cd "$INSTALL_DIR" || { print_error "Could not access directory $INSTALL_DIR"; exit 1; }
 print_success "Working directory set to: $(pwd)"
 
-# --- 3.1 Create Data Structure (Fixing Missing Folders) ---
+# --- 3.1 Create Data Structure ---
 # We explicitly create these so 'ls' shows them and they map correctly
 mkdir -p data/mongodb
 mkdir -p data/uploads
 mkdir -p data/certs
-# Set generic permissions to avoid permission denied errors
+
+# Set permissions. Crucial: acme.json MUST be 600 for Traefik to work.
 chmod -R 755 data/
+touch data/certs/acme.json
+chmod 600 data/certs/acme.json
+
 print_success "Data directories created (mongodb, uploads, certs)."
 
 
@@ -171,20 +175,8 @@ if [ -n "$DOCKER_MIRROR" ]; then
     fi
 fi
 
-# --- 7. Download & Generate Config ---
-print_step "Downloading Configuration Template"
-TEMPLATE_FILE="docker-compose.yml.template"
-rm -f "$TEMPLATE_FILE"
-TEMPLATE_URL="https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/docker-compose.yml.template"
-
-if curl -s -f -O "$TEMPLATE_URL"; then
-    print_success "Template downloaded."
-else
-    print_error "Failed to download template. Check repository URL."
-    exit 1
-fi
-
-print_step "Generating Environment"
+# --- 7. Generate Files ---
+print_step "Generating Configuration Files"
 
 if [ "$SKIP_GENERATION" != "true" ]; then
     # Generate Random Passwords
@@ -192,12 +184,13 @@ if [ "$SKIP_GENERATION" != "true" ]; then
     MONGO_USER="root"
 
     # Create .env file
-    echo "DOMAIN=$DOMAIN" > .env
-    echo "LETSENCRYPT_EMAIL=$EMAIL" >> .env
-    echo "RC_VERSION=$RC_VERSION" >> .env
-    echo "MONGO_USER=$MONGO_USER" >> .env
-    echo "MONGO_PASS=$MONGO_PASS" >> .env
-    
+    cat <<EOF > .env
+DOMAIN=$DOMAIN
+LETSENCRYPT_EMAIL=$EMAIL
+RC_VERSION=$RC_VERSION
+MONGO_USER=$MONGO_USER
+MONGO_PASS=$MONGO_PASS
+EOF
     print_info "New passwords generated."
 else
     print_info "Using existing passwords from .env"
@@ -212,31 +205,108 @@ if [ ! -f mongodb.key ]; then
     print_success "KeyFile generated."
 fi
 
-cp docker-compose.yml.template docker-compose.yml
+# --- Generate docker-compose.yml LOCALLY ---
+# We use single quotes around 'EOF' to prevent bash from interpreting $ and \
+# This ensures the YAML file is written exactly as intended.
+cat << 'EOF' > docker-compose.yml
+version: '3.8'
+
+services:
+  rocketchat:
+    image: rocket.chat:${RC_VERSION:-latest}
+    restart: always
+    command: >
+      bash -c "for i in `seq 1 30`; do
+        node main.js &&
+        s=$$? && break || s=$$?;
+        echo \"Tried $$i times. Waiting 5 secs...\";
+        sleep 5;
+      done; (exit $$s)"
+    environment:
+      - MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0
+      - MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0
+      - ROOT_URL=https://${DOMAIN}
+      - PORT=3000
+      - DEPLOY_METHOD=docker
+      - ACCOUNTS_AVATAR_STORE_TYPE=GridFS
+      - FILE_UPLOAD_FILESYSTEM_PATH=/app/uploads
+    volumes:
+      - ./data/uploads:/app/uploads
+    depends_on:
+      - mongodb
+      - mongo-init-replica
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.rocketchat.rule=Host(`${DOMAIN}`)"
+      - "traefik.http.routers.rocketchat.entrypoints=websecure"
+      - "traefik.http.routers.rocketchat.tls.certresolver=myresolver"
+
+  mongodb:
+    image: mongo:5.0
+    restart: always
+    user: root
+    command: ["mongod", "--replSet", "rs0", "--oplogSize", "128", "--bind_ip_all"]
+    volumes:
+      - ./data/mongodb:/data/db
+
+  mongo-init-replica:
+    image: mongo:5.0
+    restart: "no"
+    command: >
+      bash -c "for i in `seq 1 30`; do
+        mongo --host mongodb --eval 'rs.initiate({ _id: \"rs0\", members: [ { _id: 0, host: \"mongodb:27017\" } ] })' &&
+        s=$$? && break || s=$$?;
+        echo \"Tried $$i times. Waiting 5 secs...\";
+        sleep 5;
+      done; (exit $$s)"
+    depends_on:
+      - mongodb
+
+  traefik:
+    image: traefik:v2.11
+    restart: always
+    command:
+      - "--api.insecure=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      - "--entrypoints.websecure.address=:443"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
+      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./data/certs:/letsencrypt"
+    environment:
+      - DOCKER_API_VERSION=1.44
+EOF
+
 print_success "Configuration generated."
 
-# --- 8. Cronjob Setup (NEW FEATURE) ---
+# --- 8. Cronjob Setup ---
 print_step "Setting up Auto-Renew Cronjob"
 read -p "    Enable automatic certificate renewal/maintenance cronjob? (y/n): " CRON_CONFIRM < /dev/tty
 CRON_CONFIRM=${CRON_CONFIRM:-y}
 
 if [[ "$CRON_CONFIRM" =~ ^[Yy]$ ]]; then
-    # Create the renewal script
     cat <<EOF > renew-cert.sh
 #!/bin/bash
 # Auto-generated by NetAdminPlus Installer
 cd $INSTALL_DIR
-# Restarts traefik to ensure latest certs are applied and connection is fresh
 docker compose restart traefik
 EOF
     chmod +x renew-cert.sh
     
-    # Add to crontab (Weekly execution on Sunday at 3am)
     CRON_CMD="$INSTALL_DIR/renew-cert.sh >> $INSTALL_DIR/cron.log 2>&1"
     (crontab -l 2>/dev/null | grep -v "renew-cert.sh"; echo "0 3 * * 0 $CRON_CMD") | crontab -
     
     print_success "Cronjob added! (Runs weekly at 3:00 AM)"
-    print_info "Script location: $INSTALL_DIR/renew-cert.sh"
 else
     print_info "Cronjob skipped."
 fi
@@ -283,17 +353,17 @@ printf "\r\033[K"
 
 # --- 11. Final Output ---
 print_banner
-echo -e "${GREEN}   INSTALLATION SUCCESSFUL!${NC}"
-echo -e "   --------------------------------------------------------------"
-echo -e "   Rocket.Chat URL:  https://$DOMAIN"
-echo -e "   SSL Status:       Auto-configured via Traefik (Let's Encrypt)"
-echo -e "   Data Directory:   $(pwd)/data"
-echo -e "   MongoDB User:     $MONGO_USER"
-echo -e "   MongoDB Pass:     (Check .env file)"
-echo -e "   --------------------------------------------------------------"
-echo -e "   ${CYAN}Note: If the site shows 'Bad Gateway' initially, please wait${NC}"
-echo -e "   ${CYAN}another 30 seconds for the database to finish syncing.${NC}"
-echo -e "   To view logs: docker compose logs -f"
+echo -e "${GREEN}    INSTALLATION SUCCESSFUL!${NC}"
+echo -e "    --------------------------------------------------------------"
+echo -e "    Rocket.Chat URL:  https://$DOMAIN"
+echo -e "    SSL Status:       Auto-configured via Traefik (Let's Encrypt)"
+echo -e "    Data Directory:   $(pwd)/data"
+echo -e "    MongoDB User:     $MONGO_USER"
+echo -e "    MongoDB Pass:     (Check .env file)"
+echo -e "    --------------------------------------------------------------"
+echo -e "    ${CYAN}Note: If the site shows 'Bad Gateway' initially, please wait${NC}"
+echo -e "    ${CYAN}another 30 seconds for the database to finish syncing.${NC}"
+echo -e "    To view logs: docker compose logs -f"
 
 # --- 12. Firewall Instructions ---
 print_step "Firewall Configuration (Manual Action Required)"
@@ -301,19 +371,16 @@ print_info "For your site to be accessible, you MUST open ports 80 and 443."
 echo ""
 
 if command -v ufw >/dev/null; then
-    echo -e "${YELLOW}   Detected UFW (Ubuntu/Debian). Run these commands:${NC}"
-    echo -e "   sudo ufw allow 80/tcp"
-    echo -e "   sudo ufw allow 443/tcp"
-    echo -e "   sudo ufw reload"
+    echo -e "${YELLOW}    Detected UFW (Ubuntu/Debian). Run these commands:${NC}"
+    echo -e "    sudo ufw allow 80/tcp"
+    echo -e "    sudo ufw allow 443/tcp"
+    echo -e "    sudo ufw reload"
 elif command -v firewall-cmd >/dev/null; then
-    echo -e "${YELLOW}   Detected Firewalld (CentOS/Rocky/Alma). Run these commands:${NC}"
-    echo -e "   sudo firewall-cmd --permanent --add-service=http"
-    echo -e "   sudo firewall-cmd --permanent --add-service=https"
-    echo -e "   sudo firewall-cmd --reload"
+    echo -e "${YELLOW}    Detected Firewalld (CentOS/Rocky/Alma). Run these commands:${NC}"
+    echo -e "    sudo firewall-cmd --permanent --add-service=http"
+    echo -e "    sudo firewall-cmd --permanent --add-service=https"
+    echo -e "    sudo firewall-cmd --reload"
 else
-    echo -e "${YELLOW}   Unknown Firewall. Please manually open TCP ports 80 and 443.${NC}"
-    echo -e "   Example (iptables):"
-    echo -e "   iptables -A INPUT -p tcp --dport 80 -j ACCEPT"
-    echo -e "   iptables -A INPUT -p tcp --dport 443 -j ACCEPT"
+    echo -e "${YELLOW}    Unknown Firewall. Please manually open TCP ports 80 and 443.${NC}"
 fi
 echo ""
