@@ -79,18 +79,17 @@ cd "$INSTALL_DIR" || { print_error "Could not access directory $INSTALL_DIR"; ex
 print_success "Working directory set to: $(pwd)"
 
 # --- 3.1 Create Data Structure ---
-# We explicitly create these so 'ls' shows them and they map correctly
 mkdir -p data/mongodb
 mkdir -p data/uploads
 mkdir -p data/certs
 
-# Set permissions. Crucial: acme.json MUST be 600 for Traefik to work.
-chmod -R 755 data/
+# --- FIX PERMISSIONS (CRITICAL FOR TRAEFIK) ---
+# Traefik will crash if acme.json is not 600
 touch data/certs/acme.json
 chmod 600 data/certs/acme.json
+chmod -R 755 data/mongodb data/uploads
 
-print_success "Data directories created (mongodb, uploads, certs)."
-
+print_success "Data directories created and permissions fixed."
 
 # --- 4. Configuration Gathering ---
 print_step "Configuration Setup"
@@ -175,8 +174,20 @@ if [ -n "$DOCKER_MIRROR" ]; then
     fi
 fi
 
-# --- 7. Generate Files ---
-print_step "Generating Configuration Files"
+# --- 7. Download & Generate Config ---
+print_step "Downloading Configuration Template"
+TEMPLATE_FILE="docker-compose.yml.template"
+rm -f "$TEMPLATE_FILE"
+TEMPLATE_URL="https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/docker-compose.yml.template"
+
+if curl -s -f -O "$TEMPLATE_URL"; then
+    print_success "Template downloaded."
+else
+    print_error "Failed to download template. Check repository URL."
+    exit 1
+fi
+
+print_step "Generating Environment"
 
 if [ "$SKIP_GENERATION" != "true" ]; then
     # Generate Random Passwords
@@ -184,13 +195,13 @@ if [ "$SKIP_GENERATION" != "true" ]; then
     MONGO_USER="root"
 
     # Create .env file
-    cat <<EOF > .env
-DOMAIN=$DOMAIN
-LETSENCRYPT_EMAIL=$EMAIL
-RC_VERSION=$RC_VERSION
-MONGO_USER=$MONGO_USER
-MONGO_PASS=$MONGO_PASS
-EOF
+    # We use simple echo here because variable substitution happens later by Docker Compose
+    echo "DOMAIN=$DOMAIN" > .env
+    echo "LETSENCRYPT_EMAIL=$EMAIL" >> .env
+    echo "RC_VERSION=$RC_VERSION" >> .env
+    echo "MONGO_USER=$MONGO_USER" >> .env
+    echo "MONGO_PASS=$MONGO_PASS" >> .env
+    
     print_info "New passwords generated."
 else
     print_info "Using existing passwords from .env"
@@ -205,88 +216,8 @@ if [ ! -f mongodb.key ]; then
     print_success "KeyFile generated."
 fi
 
-# --- Generate docker-compose.yml LOCALLY ---
-# We use single quotes around 'EOF' to prevent bash from interpreting $ and \
-# This ensures the YAML file is written exactly as intended.
-cat << 'EOF' > docker-compose.yml
-version: '3.8'
-
-services:
-  rocketchat:
-    image: rocket.chat:${RC_VERSION:-latest}
-    restart: always
-    command: >
-      bash -c "for i in `seq 1 30`; do
-        node main.js &&
-        s=$$? && break || s=$$?;
-        echo \"Tried $$i times. Waiting 5 secs...\";
-        sleep 5;
-      done; (exit $$s)"
-    environment:
-      - MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0
-      - MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0
-      - ROOT_URL=https://${DOMAIN}
-      - PORT=3000
-      - DEPLOY_METHOD=docker
-      - ACCOUNTS_AVATAR_STORE_TYPE=GridFS
-      - FILE_UPLOAD_FILESYSTEM_PATH=/app/uploads
-    volumes:
-      - ./data/uploads:/app/uploads
-    depends_on:
-      - mongodb
-      - mongo-init-replica
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.rocketchat.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.rocketchat.entrypoints=websecure"
-      - "traefik.http.routers.rocketchat.tls.certresolver=myresolver"
-
-  mongodb:
-    image: mongo:5.0
-    restart: always
-    user: root
-    command: ["mongod", "--replSet", "rs0", "--oplogSize", "128", "--bind_ip_all"]
-    volumes:
-      - ./data/mongodb:/data/db
-
-  mongo-init-replica:
-    image: mongo:5.0
-    restart: "no"
-    command: >
-      bash -c "for i in `seq 1 30`; do
-        mongo --host mongodb --eval 'rs.initiate({ _id: \"rs0\", members: [ { _id: 0, host: \"mongodb:27017\" } ] })' &&
-        s=$$? && break || s=$$?;
-        echo \"Tried $$i times. Waiting 5 secs...\";
-        sleep 5;
-      done; (exit $$s)"
-    depends_on:
-      - mongodb
-
-  traefik:
-    image: traefik:v2.11
-    restart: always
-    command:
-      - "--api.insecure=false"
-      - "--providers.docker=true"
-      - "--providers.docker.exposedbydefault=false"
-      - "--entrypoints.web.address=:80"
-      - "--entrypoints.websecure.address=:443"
-      - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
-      - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
-      - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
-      - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
-      - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "./data/certs:/letsencrypt"
-    environment:
-      - DOCKER_API_VERSION=1.44
-EOF
-
+# Copy template to final file (Docker Compose will read .env automatically)
+cp docker-compose.yml.template docker-compose.yml
 print_success "Configuration generated."
 
 # --- 8. Cronjob Setup ---
