@@ -14,7 +14,7 @@ services:
     environment:
       - MONGO_URL=mongodb://mongodb:27017/rocketchat?replicaSet=rs0
       - MONGO_OPLOG_URL=mongodb://mongodb:27017/local?replicaSet=rs0
-      - ROOT_URL=https://${DOMAIN}
+      - ROOT_URL=https://${DOMAIN}:8443
       - PORT=3000
       - DEPLOY_METHOD=docker
       - ACCOUNTS_AVATAR_STORE_TYPE=GridFS
@@ -27,7 +27,7 @@ services:
     labels:
       - "traefik.enable=true"
       - "traefik.http.routers.rocketchat.rule=Host(`${DOMAIN}`)"
-      - "traefik.http.routers.rocketchat.entrypoints=websecure"
+      - "traefik.http.routers.rocketchat.entrypoints=websecure_alt"
       - "traefik.http.routers.rocketchat.tls.certresolver=myresolver"
 
   mongodb:
@@ -58,17 +58,28 @@ services:
       - "--api.insecure=false"
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
+
+      # HTTP (برای Let's Encrypt)
       - "--entrypoints.web.address=:80"
+
+      # HTTPS اصلی داخل کانتینر
       - "--entrypoints.websecure.address=:443"
+
+      # HTTPS بیرونی روی پورت 8443
+      - "--entrypoints.websecure_alt.address=:8443"
+
       - "--certificatesresolvers.myresolver.acme.httpchallenge=true"
       - "--certificatesresolvers.myresolver.acme.httpchallenge.entrypoint=web"
       - "--certificatesresolvers.myresolver.acme.email=${LETSENCRYPT_EMAIL}"
       - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
-      - "--entrypoints.web.http.redirections.entryPoint.to=websecure"
+
+      # ریدایرکت HTTP → HTTPS جدید
+      - "--entrypoints.web.http.redirections.entryPoint.to=websecure_alt"
       - "--entrypoints.web.http.redirections.entryPoint.scheme=https"
+
     ports:
       - "80:80"
-      - "443:443"
+      - "8443:8443"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
       - "./data/certs:/letsencrypt"
