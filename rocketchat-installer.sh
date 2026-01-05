@@ -286,7 +286,7 @@ printf "\r\033[K"
 print_banner
 echo -e "${GREEN}    INSTALLATION SUCCESSFUL!${NC}"
 echo -e "    --------------------------------------------------------------"
-echo -e "    Rocket.Chat URL:  https://$DOMAIN"
+echo -e "    Rocket.Chat URL:  https://$DOMAIN:8443"
 echo -e "    SSL Status:       Auto-configured via Traefik (Let's Encrypt)"
 echo -e "    Data Directory:   $(pwd)/data"
 echo -e "    MongoDB User:     $MONGO_USER"
@@ -298,20 +298,20 @@ echo -e "    To view logs: docker compose logs -f"
 
 # --- 12. Firewall Instructions ---
 print_step "Firewall Configuration (Manual Action Required)"
-print_info "For your site to be accessible, you MUST open ports 80 and 443."
+print_info "For your site to be accessible, you MUST open ports 80 and 8443."
 echo ""
 
 if command -v ufw >/dev/null; then
     echo -e "${YELLOW}    Detected UFW (Ubuntu/Debian). Run these commands:${NC}"
     echo -e "    sudo ufw allow 80/tcp"
-    echo -e "    sudo ufw allow 443/tcp"
+    echo -e "    sudo ufw allow 8443/tcp"
     echo -e "    sudo ufw reload"
 elif command -v firewall-cmd >/dev/null; then
     echo -e "${YELLOW}    Detected Firewalld (CentOS/Rocky/Alma). Run these commands:${NC}"
-    echo -e "    sudo firewall-cmd --permanent --add-service=http"
-    echo -e "    sudo firewall-cmd --permanent --add-service=https"
+    echo -e "    sudo firewall-cmd --permanent --add-port=80/tcp"
+    echo -e "    sudo firewall-cmd --permanent --add-port=8443/tcp"
     echo -e "    sudo firewall-cmd --reload"
 else
-    echo -e "${YELLOW}    Unknown Firewall. Please manually open TCP ports 80 and 443.${NC}"
+    echo -e "${YELLOW}    Unknown Firewall. Please manually open TCP ports 80 and 8443.${NC}"
 fi
 echo ""
