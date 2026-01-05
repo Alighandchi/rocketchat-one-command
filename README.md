@@ -53,7 +53,7 @@
 </div>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh
+curl -fsSL https://raw.githubusercontent.com/Alighandchi/rocketchat-one-command/main/rocketchat-installer.sh
 chmod +x rocketchat-installer.sh
 sudo ./rocketchat-installer.sh
 ```
@@ -67,7 +67,7 @@ sudo ./rocketchat-installer.sh
 </div>
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command/main/rocketchat-installer.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Alighandchi/rocketchat-one-command/main/rocketchat-installer.sh | sudo bash
 ```
 
 <div dir="rtl">
@@ -77,7 +77,7 @@ curl -fsSL https://raw.githubusercontent.com/netadminplus/rocketchat-one-command
 </div>
 
 ```bash
-git clone https://github.com/netadminplus/rocketchat-one-command.git
+git clone https://github.com/Alighandchi/rocketchat-one-command.git
 cd rocketchat-one-command
 chmod +x rocketchat-installer.sh
 sudo ./rocketchat-installer.sh
@@ -260,7 +260,7 @@ rm -rf netadminplus-rocketchat/
 - 📺 **یوتیوب**: [@netadminplus](https://youtube.com/@netadminplus)
 - 🌐 **وبسایت**: [netadminplus.com](https://netadminplus.com)
 - 📸 **اینستاگرام**: [@netadminplus](https://instagram.com/netadminplus)
-- 🐛 **گزارش مشکل**: [GitHub Issues](https://github.com/netadminplus/rocketchat-one-command/issues)
+- 🐛 **گزارش مشکل**: [GitHub Issues](https://github.com/Alighandchi/rocketchat-one-command/issues)
 
 ---
 
